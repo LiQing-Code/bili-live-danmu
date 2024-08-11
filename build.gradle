@@ -1,0 +1,23 @@
+plugins {
+    id 'java'
+}
+
+group = 'cn.liqing'
+version = '3.0.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+
+    implementation 'org.java-websocket:Java-WebSocket:1.5.7'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+    implementation 'org.jetbrains:annotations:24.1.0'
+}
+
+test {
+    useJUnitPlatform()
+}
