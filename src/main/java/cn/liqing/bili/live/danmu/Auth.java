@@ -11,6 +11,8 @@ import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -49,10 +51,21 @@ public class Auth {
     private static String GetKey(long roomId, String cookie) throws IOException, InterruptedException, URISyntaxException {
         HttpResponse<String> response;
         HttpClient client = HttpClient.newHttpClient();
-        String wsInfoURL = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?id=%s&type=0";
-        URI uri = new URI(String.format(wsInfoURL, roomId));
 
-        HttpRequest request = HttpRequest.newBuilder(uri)
+        Map<String, Object> params = new HashMap<>();
+        params.put("id", roomId);
+        params.put("type", "0");
+
+        String signedQuery;
+        try {
+            signedQuery = BiliWbiSign.wbiSign(params);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        String baseUrl = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
+        String fullUrl = baseUrl + "?" + signedQuery;
+
+        HttpRequest request = HttpRequest.newBuilder(URI.create(fullUrl))
                 .header("Accept", "*/*")
                 .header("Cookie", cookie).build();
 
