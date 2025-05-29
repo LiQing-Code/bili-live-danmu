@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'cn.liqing'
-version = '3.0.0'
+version = '3.0.1'
 
 repositories {
     mavenCentral()
