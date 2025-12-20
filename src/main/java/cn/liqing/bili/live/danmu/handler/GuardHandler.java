@@ -3,6 +3,8 @@ package cn.liqing.bili.live.danmu.handler;
 import cn.liqing.bili.live.danmu.Message;
 import cn.liqing.bili.live.danmu.MessageHandler;
 import cn.liqing.bili.live.danmu.model.Guard;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,21 +28,23 @@ public class GuardHandler implements MessageHandler {
     @Override
     public void handle(Message message) {
         try {
-            var data = message.data;
+            JsonElement data = message.data;
             if (data == null) {
                 LOGGER.error("舰长包中没有data");
                 return;
             }
+            JsonObject dataObj = data.getAsJsonObject();
+            
             var guard = new Guard();
-            guard.user.uid = data.get("uid").asText();
-            guard.user.name = data.get("username").asText();
-            guard.user.guardLevel = data.get("guard_level").asInt();
-            guard.id = data.get("gift_id").asInt();
-            guard.name = data.get("role_name").asText();
-            guard.price = data.get("price").asInt() / 1000f;
-            guard.num = data.get("num").asInt();
+            guard.user.uid = dataObj.get("uid").getAsString();
+            guard.user.name = dataObj.get("username").getAsString();
+            guard.user.guardLevel = dataObj.get("guard_level").getAsInt();
+            guard.id = dataObj.get("gift_id").getAsInt();
+            guard.name = dataObj.get("role_name").getAsString();
+            guard.price = dataObj.get("price").getAsInt() / 1000f;
+            guard.num = dataObj.get("num").getAsInt();
             guard.level = guard.user.guardLevel;
-            guard.unit = data.get("unit").asText();
+            guard.unit = dataObj.get("unit").getAsString();
             onGuard.accept(guard);
         } catch (Exception ex) {
             LOGGER.error("解析消息出错", ex);

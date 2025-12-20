@@ -1,10 +1,9 @@
 package cn.liqing.bili.live.danmu;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,13 +15,21 @@ import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 public class DanmuClient {
-    static final Logger LOGGER = LoggerFactory.getLogger(DanmuClient.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(DanmuClient.class);
+    private static final Gson GSON = new Gson();
+    
     private final URI serverUri;
     private WebSocketClient wsClient;
     private ConnectionListener connectionListener;
     private final List<MessageHandler> handlers = new ArrayList<>();
+    private ScheduledExecutorService heartbeatScheduler;
+    private ScheduledFuture<?> heartbeatTask;
 
     public DanmuClient() {
         this(URI.create("wss://broadcastlv.chat.bilibili.com:2245/sub"));
@@ -38,16 +45,14 @@ public class DanmuClient {
         }
 
         wsClient = new WebSocketClient(serverUri) {
-            private Timer heartbeatTimer;
-
             @Override
             public void onOpen(ServerHandshake handshakedata) {
-                if (connectionListener != null)
+                if (connectionListener != null) {
                     connectionListener.onOpen();
+                }
 
                 try {
-                    //发送认证包
-                    byte[] body = new ObjectMapper().writeValueAsBytes(auth);
+                    byte[] body = GSON.toJson(auth).getBytes(StandardCharsets.UTF_8);
                     send(new Packet(Packet.Operation.AUTH, body).pack());
                 } catch (Exception e) {
                     throw new RuntimeException("认证出错", e);
@@ -58,15 +63,17 @@ public class DanmuClient {
 
             @Override
             public void onClose(int code, String reason, boolean remote) {
-                if (connectionListener != null)
+                if (connectionListener != null) {
                     connectionListener.onClose(code, reason, remote);
+                }
                 stopHeartbeat();
             }
 
             @Override
             public void onError(Exception ex) {
-                if (connectionListener != null)
+                if (connectionListener != null) {
                     connectionListener.onError(ex);
+                }
             }
 
             @Override
@@ -75,33 +82,41 @@ public class DanmuClient {
 
             @Override
             public void onMessage(ByteBuffer bytes) {
-                var packets = Packet.unPack(bytes);
-                packets.forEach(packet -> onPacket(packet));
-            }
-
-            private void startHeartbeat() {
-                heartbeatTimer = new Timer(true); // Daemon thread to avoid blocking JVM shutdown
-                heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
-                    @Override
-                    public void run() {
-                        if (wsClient != null && wsClient.isOpen()) {
-                            send(new Packet(Packet.Operation.HEARTBEAT, new byte[0]).pack());
-                        }
-                    }
-                }, 0, 30 * 1000); // 每30秒执行一次
-            }
-
-            private void stopHeartbeat() {
-                if (heartbeatTimer != null) {
-                    heartbeatTimer.cancel(); // 停止定时任务
-                }
+                List<Packet> packets = Packet.unPack(bytes);
+                packets.forEach(DanmuClient.this::onPacket);
             }
         };
 
         wsClient.connect();
     }
 
+    private void startHeartbeat() {
+        heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "BiliDanmu-Heartbeat");
+            thread.setDaemon(true);
+            return thread;
+        });
+        
+        heartbeatTask = heartbeatScheduler.scheduleAtFixedRate(() -> {
+            if (wsClient != null && wsClient.isOpen()) {
+                wsClient.send(new Packet(Packet.Operation.HEARTBEAT, new byte[0]).pack());
+            }
+        }, 0, 30, TimeUnit.SECONDS);
+    }
+
+    private void stopHeartbeat() {
+        if (heartbeatTask != null) {
+            heartbeatTask.cancel(false);
+            heartbeatTask = null;
+        }
+        if (heartbeatScheduler != null) {
+            heartbeatScheduler.shutdown();
+            heartbeatScheduler = null;
+        }
+    }
+
     public void disconnect() {
+        stopHeartbeat();
         if (wsClient != null) {
             wsClient.close();
             wsClient = null;
@@ -109,9 +124,7 @@ public class DanmuClient {
     }
 
     public boolean isOpen() {
-        if (wsClient == null)
-            return false;
-        return wsClient.isOpen();
+        return wsClient != null && wsClient.isOpen();
     }
 
     public void setListener(ConnectionListener listener) {
@@ -133,10 +146,11 @@ public class DanmuClient {
 
             Message message;
             try {
-                message = new ObjectMapper().readValue(bodyStr, Message.class);
+                message = GSON.fromJson(bodyStr, Message.class);
             } catch (Exception ex) {
                 throw new RuntimeException("解析消息出错", ex);
             }
+            
             if (message.cmd == null) {
                 throw new RuntimeException("消息包中没有cmd");
             }
@@ -149,106 +163,46 @@ public class DanmuClient {
         }
     }
 
-    // 生成随机数的方法
     public static @NotNull String generateRandomNumber() {
-        Random random = new Random();
-        return String.valueOf(random.nextInt(Integer.MAX_VALUE));
+        return String.valueOf(new Random().nextInt(Integer.MAX_VALUE));
     }
 
-    // 从 Cookie 中获取 CSRF Token 的值
-    public static @Nullable String getCsrfTokenFromCookies(@NotNull String cookies) {
-        for (String cookie : cookies.split(";")) {
-            String[] pair = cookie.trim().split("=");
-            if (pair.length == 2 && pair[0].equals("bili_jct")) {
-                return pair[1];
+    public static void send(String cookie, String roomId, String message) throws IOException {
+        String url = "https://api.live.bilibili.com/msg/send";
+        String csrf = extractCookieValue("bili_jct", cookie);
+        String postData = String.format(
+                "color=16777215&fontsize=25&mode=1&msg=%s&rnd=%d&roomid=%s&bubble=0&csrf_token=%s&csrf=%s",
+                java.net.URLEncoder.encode(message, StandardCharsets.UTF_8),
+                System.currentTimeMillis() / 1000,
+                roomId,
+                csrf,
+                csrf
+        );
+
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        connection.setRequestMethod("POST");
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+        connection.setRequestProperty("Cookie", cookie);
+
+        try (OutputStream os = connection.getOutputStream()) {
+            os.write(postData.getBytes(StandardCharsets.UTF_8));
+        }
+
+        int responseCode = connection.getResponseCode();
+        if (responseCode != HttpURLConnection.HTTP_OK) {
+            throw new IOException("发送弹幕失败，HTTP 状态码: " + responseCode);
+        }
+    }
+
+    private static String extractCookieValue(String cookieName, String cookieString) {
+        String[] cookies = cookieString.split(";");
+        for (String cookie : cookies) {
+            cookie = cookie.trim();
+            if (cookie.startsWith(cookieName + "=")) {
+                return cookie.substring(cookieName.length() + 1);
             }
         }
         return null;
     }
-
-    public static void send(String cookies, String room, String message) throws IOException {
-        URL url = new URL("https://api.live.bilibili.com/msg/send");
-        String csrf = getCsrfTokenFromCookies(cookies);
-
-        // 打开连接
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-
-        // 设置请求方法和请求头
-
-        connection.setRequestMethod("POST");
-        connection.setDoOutput(true);
-        connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundaryp2ynm67gIeqyCK5D");
-        connection.setRequestProperty("Cookie", cookies);
-        connection.setRequestProperty("Accept", "*/*");
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 Edg/127.0.0.0");
-
-        // 请求体内容
-        String boundary = "------WebKitFormBoundaryp2ynm67gIeqyCK5D";
-        String data = boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"bubble\"\r\n\r\n" +
-                "0\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"msg\"\r\n\r\n" +
-                message + "\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"color\"\r\n\r\n" +
-                "16777215\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"mode\"\r\n\r\n" +
-                "1\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"room_type\"\r\n\r\n" +
-                "0\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"jumpfrom\"\r\n\r\n" +
-                "0\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"reply_mid\"\r\n\r\n" +
-                "0\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"reply_attr\"\r\n\r\n" +
-                "0\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"replay_dmid\"\r\n\r\n" +
-                "\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"statistics\"\r\n\r\n" +
-                "{\"appId\":100,\"platform\":5}\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"fontsize\"\r\n\r\n" +
-                "25\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"rnd\"\r\n\r\n" +
-                generateRandomNumber() + "\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"roomid\"\r\n\r\n" +
-                room + "\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"csrf\"\r\n\r\n" +
-                csrf + "\r\n" +
-                boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"csrf_token\"\r\n\r\n" +
-                csrf + "\r\n" +
-                boundary + "--\r\n";
-
-        // 发送数据
-        try (OutputStream os = connection.getOutputStream()) {
-            os.write(data.getBytes(StandardCharsets.UTF_8));
-            os.flush();
-        }
-
-        // 获取响应
-        int responseCode = connection.getResponseCode();
-//      System.out.println("Response Code: " + responseCode);
-//
-//        // 读取响应内容
-//        BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-//        String inputLine;
-//        StringBuilder response = new StringBuilder();
-//        while ((inputLine = in.readLine()) != null) {
-//            response.append(inputLine);
-//        }
-//        in.close();
-    }
-
 }

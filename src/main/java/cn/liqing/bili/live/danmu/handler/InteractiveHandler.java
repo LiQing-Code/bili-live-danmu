@@ -4,6 +4,8 @@ import cn.liqing.bili.live.danmu.Message;
 import cn.liqing.bili.live.danmu.MessageHandler;
 import cn.liqing.bili.live.danmu.User;
 import cn.liqing.bili.live.danmu.model.Interactive;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,26 +29,29 @@ public class InteractiveHandler implements MessageHandler {
     @Override
     public void handle(Message message) {
         try {
-            var data = message.data;
+            JsonElement data = message.data;
             if (data == null) {
                 LOGGER.error("互动包中没有data");
                 return;
             }
+            JsonObject dataObj = data.getAsJsonObject();
+            
             var interactive = new Interactive();
-            interactive.user.uid = data.get("uid").asText();
-            interactive.user.name = data.get("uname").asText();
+            interactive.user.uid = dataObj.get("uid").getAsString();
+            interactive.user.name = dataObj.get("uname").getAsString();
 
-            var fansMedal = data.get("fans_medal");
-            if (fansMedal != null && !fansMedal.isNull()) {
+            JsonElement fansMedal = dataObj.get("fans_medal");
+            if (fansMedal != null && !fansMedal.isJsonNull()) {
+                JsonObject medalObj = fansMedal.getAsJsonObject();
                 interactive.user.fansMedal = new User.FansMedal();
-                interactive.user.fansMedal.name = fansMedal.get("medal_name").asText();
-                interactive.user.fansMedal.level = fansMedal.get("medal_level").asInt();
-                interactive.user.guardLevel = fansMedal.get("guard_level").asInt();
+                interactive.user.fansMedal.name = medalObj.get("medal_name").getAsString();
+                interactive.user.fansMedal.level = medalObj.get("medal_level").getAsInt();
+                interactive.user.guardLevel = medalObj.get("guard_level").getAsInt();
                 if (interactive.user.fansMedal.name.isEmpty())
                     interactive.user.fansMedal = null;
             }
 
-            interactive.type = data.get("msg_type").asInt();
+            interactive.type = dataObj.get("msg_type").getAsInt();
             onInteractive.accept(interactive);
         } catch (Exception ex) {
             LOGGER.error("解析消息出错", ex);

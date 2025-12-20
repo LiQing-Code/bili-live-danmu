@@ -1,13 +1,12 @@
 package cn.liqing.bili.live.danmu;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -17,6 +16,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 public class Auth {
+    private static final Gson GSON = new Gson();
+    
     public final long uid;
     public final long roomid;
     @SuppressWarnings("unused")
@@ -35,21 +36,24 @@ public class Auth {
         this.key = key;
     }
 
-    public static @NotNull Auth create(long roomid, String cookie) throws IOException, URISyntaxException, InterruptedException {
-        String key = GetKey(roomid, cookie);
+    public static @NotNull Auth create(long roomid, String cookie) 
+            throws IOException, InterruptedException {
+        String key = getKey(roomid, cookie);
         String buvid = extractCookieValue("buvid3", cookie);
-        long uid = Long.parseLong(Objects.requireNonNull(extractCookieValue("DedeUserID", cookie)));
+        long uid = Long.parseLong(Objects.requireNonNull(
+            extractCookieValue("DedeUserID", cookie)));
         return new Auth(roomid, uid, buvid, key);
     }
 
-    public static @NotNull Auth create(long roomid) throws IOException, URISyntaxException, InterruptedException {
-        String key = GetKey(roomid, "");
-        String buvid = GeneratedUUID();
+    public static @NotNull Auth create(long roomid) 
+            throws IOException, InterruptedException {
+        String key = getKey(roomid, "");
+        String buvid = generateUUID();
         return new Auth(roomid, 0, buvid, key);
     }
 
-    private static String GetKey(long roomId, String cookie) throws IOException, InterruptedException, URISyntaxException {
-        HttpResponse<String> response;
+    private static String getKey(long roomId, String cookie) 
+            throws IOException, InterruptedException {
         HttpClient client = HttpClient.newHttpClient();
 
         Map<String, Object> params = new HashMap<>();
@@ -60,51 +64,42 @@ public class Auth {
         try {
             signedQuery = BiliWbiSign.wbiSign(params);
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("签名失败", e);
         }
+        
         String baseUrl = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
         String fullUrl = baseUrl + "?" + signedQuery;
 
         HttpRequest request = HttpRequest.newBuilder(URI.create(fullUrl))
                 .header("Accept", "*/*")
-                .header("Cookie", cookie).build();
+                .header("Cookie", cookie)
+                .build();
 
-        response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        JsonNode rootNode = new ObjectMapper().readTree(response.body());
-        return rootNode.path("data").path("token").asText();
+        HttpResponse<String> response = client.send(request, 
+            HttpResponse.BodyHandlers.ofString());
+        
+        JsonObject root = GSON.fromJson(response.body(), JsonObject.class);
+        return root.getAsJsonObject("data")
+                   .get("token")
+                   .getAsString();
     }
 
-    private static @Nullable String extractCookieValue(String cookieName, @NotNull String cookieString) {
+    private static @Nullable String extractCookieValue(String cookieName, 
+                                                       @NotNull String cookieString) {
         String[] cookies = cookieString.split(";");
-
         for (String cookie : cookies) {
-            cookie = cookie.trim(); // 去除首尾空格
-
+            cookie = cookie.trim();
             if (cookie.startsWith(cookieName + "=")) {
-                // 找到对应的 Cookie，提取值
-                return cookie.substring(cookieName.length() + 1); // 加上等号长度
+                return cookie.substring(cookieName.length() + 1);
             }
         }
-
-        // 没有找到对应的 Cookie
         return null;
     }
 
-    // 生成随机的UUID
-    private static @NotNull String GeneratedUUID() {
+    private static @NotNull String generateUUID() {
         UUID uuid = UUID.randomUUID();
-
-        // 获取当前时间的毫秒数，用来生成后缀
         long currentTimeMillis = System.currentTimeMillis();
-        String suffix = String.format("%05d", currentTimeMillis % 100000); // 取后五位，不足五位补零
-
-        // 拼接结果
-        return String.format("%s-%s-%s-%s-%s%sinfoc",
-                uuid.toString().substring(0, 8),
-                uuid.toString().substring(9, 13),
-                uuid.toString().substring(14, 18),
-                uuid.toString().substring(19, 23),
-                uuid.toString().substring(24, 36),
-                suffix);
+        String timestampSuffix = String.valueOf(currentTimeMillis).substring(0, 5);
+        return uuid.toString().replace("-", "") + timestampSuffix + "infoc";
     }
 }
