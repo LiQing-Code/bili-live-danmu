@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'cn.liqing'
-version = '4.0.0'
+version = '4.0.1'
 
 repositories {
     mavenCentral()
@@ -13,21 +13,30 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 
-    // 使用 Gson 替代 Jackson
     api 'com.google.code.gson:gson:2.11.0'
     api 'org.java-websocket:Java-WebSocket:1.5.7'
-    
-    // 编译时依赖
+
     compileOnly 'org.jetbrains:annotations:26.0.1'
     compileOnly 'org.slf4j:slf4j-api:2.0.16'
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-    
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+
     withSourcesJar()
     withJavadocJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+    options.charSet = 'UTF-8'
+    options.addStringOption('Xdoclint:none', '-quiet')
+    options.addStringOption('docencoding', 'UTF-8')
 }
 
 test {
